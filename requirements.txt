@@ -1,0 +1,8 @@
+streamlit>=1.32,<2
+pandas>=2.0
+numpy>=1.24
+scipy>=1.11
+scikit-learn>=1.3
+statsmodels>=0.14
+plotly>=5.18
+pymc-marketing>=0.7    # if Streamlit Cloud build is too slow, comment out and fall back to Ridge

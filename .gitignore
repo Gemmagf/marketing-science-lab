@@ -1,0 +1,34 @@
+# Internal working docs — don't ship to public repo
+PROJECT_BRIEF.md
+STATUS.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+
+# R session
+.Rhistory
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Build / cache
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editor
+.vscode/
+.idea/
