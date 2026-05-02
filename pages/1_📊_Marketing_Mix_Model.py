@@ -6,16 +6,23 @@ import pandas as pd
 import streamlit as st
 
 from src import viz
+from src.bayesian import load_posterior
 from src.data_generation import CHANNELS, generate_dataset
 from src.mmm import MMM, channel_mroi, optimise_budget
 
 
 st.set_page_config(page_title="MMM · Marketing Science Lab", page_icon="📊", layout="wide")
 
+posterior = load_posterior()
+fit_label = (
+    "Bayesian PyMC-Marketing posterior (offline fit)" if posterior is not None
+    else "Ridge / NNLS in-app fit (Bayesian fallback)"
+)
+
 st.title("📊 Marketing Mix Model")
 st.caption(
-    "Bayesian-style MMM on a synthetic D2C running brand. "
-    "Adstock + Hill saturation; non-negative coefficients (NNLS Ridge fallback)."
+    "Adstock + Hill saturation on a synthetic D2C running brand. "
+    f"Currently displaying: **{fit_label}**."
 )
 
 
@@ -180,24 +187,74 @@ with st.expander("📐 Model diagnostics", expanded=show_truth):
     d2.metric("MAPE", f"{fit.mape:.2%}")
 
     if show_truth:
-        st.markdown("**Recovered β vs ground truth** — the credibility moment.")
-        fig_b = viz.beta_recovery(truth.betas, fit.betas)
-        st.plotly_chart(fig_b, use_container_width=True)
+        if posterior is not None:
+            st.markdown(
+                "**Recovered β vs ground truth — Bayesian posterior** "
+                f"({posterior.chains} chains × {posterior.draws} draws, NUTS). "
+                "Bars are posterior means; error bars span 5%–95% credible intervals."
+            )
+            channels = list(truth.betas.keys())
+            import plotly.graph_objects as go
+            fig_b = go.Figure()
+            fig_b.add_trace(go.Bar(
+                x=channels, y=[truth.betas[c] for c in channels],
+                name="Ground truth", marker_color=viz.PALETTE["primary"],
+            ))
+            fig_b.add_trace(go.Bar(
+                x=channels, y=[posterior.betas_mean.get(c, 0.0) for c in channels],
+                name="Posterior mean", marker_color=viz.PALETTE["accent"],
+                error_y=dict(
+                    type="data", symmetric=False,
+                    array=[posterior.betas_q95.get(c, 0.0) - posterior.betas_mean.get(c, 0.0) for c in channels],
+                    arrayminus=[posterior.betas_mean.get(c, 0.0) - posterior.betas_q05.get(c, 0.0) for c in channels],
+                ),
+            ))
+            fig_b.update_layout(barmode="group", title="β recovery vs ground truth (with 90% CI)",
+                                plot_bgcolor=viz.PALETTE["bg"], paper_bgcolor=viz.PALETTE["bg"])
+            st.plotly_chart(fig_b, use_container_width=True)
 
-        recovery_df = pd.DataFrame({
-            "channel": list(truth.betas.keys()),
-            "true β": list(truth.betas.values()),
-            "estimated β": [fit.betas[c] for c in truth.betas],
-            "true λ": list(truth.decay.values()),
-            "estimated λ": [fit.decay[c] for c in truth.decay],
-            "true k": list(truth.half_sat.values()),
-            "estimated k": [fit.half_sat[c] for c in truth.half_sat],
-        }).set_index("channel")
-        st.dataframe(recovery_df.style.format("{:,.2f}"), use_container_width=True)
+            recovery_df = pd.DataFrame({
+                "channel": channels,
+                "true β":         [truth.betas[c]              for c in channels],
+                "post. mean":     [posterior.betas_mean.get(c, 0.0) for c in channels],
+                "5% CI":          [posterior.betas_q05.get(c, 0.0)  for c in channels],
+                "95% CI":         [posterior.betas_q95.get(c, 0.0)  for c in channels],
+                "true λ":         [truth.decay[c]              for c in channels],
+                "post. mean λ":   [posterior.decay_mean.get(c, 0.0) for c in channels],
+                "true k":         [truth.half_sat[c]           for c in channels],
+                "post. mean k":   [posterior.half_sat_mean.get(c, 0.0) for c in channels],
+            }).set_index("channel")
+            st.dataframe(recovery_df.style.format("{:,.2f}"), use_container_width=True)
+            st.caption(
+                f"Posterior fit: R²={posterior.r_squared:.3f}, MAPE={posterior.mape:.2%}. "
+                "Generated offline by ``scripts/fit_bayesian_mmm.py`` and persisted to "
+                "``assets/mmm_posterior.json`` so PyMC-Marketing stays out of the deployed image."
+            )
+        else:
+            st.markdown("**Recovered β vs ground truth** — Ridge fit (no Bayesian posterior file present).")
+            fig_b = viz.beta_recovery(truth.betas, fit.betas)
+            st.plotly_chart(fig_b, use_container_width=True)
+
+            recovery_df = pd.DataFrame({
+                "channel":      list(truth.betas.keys()),
+                "true β":       list(truth.betas.values()),
+                "estimated β":  [fit.betas[c] for c in truth.betas],
+                "true λ":       list(truth.decay.values()),
+                "estimated λ":  [fit.decay[c] for c in truth.decay],
+                "true k":       list(truth.half_sat.values()),
+                "estimated k":  [fit.half_sat[c] for c in truth.half_sat],
+            }).set_index("channel")
+            st.dataframe(recovery_df.style.format("{:,.2f}"), use_container_width=True)
+            st.info(
+                "The Ridge fallback recovers the in-sample fit but cannot disambiguate "
+                "individual channel βs as cleanly as the Bayesian model. Run "
+                "``python scripts/fit_bayesian_mmm.py`` locally to generate the posterior file."
+            )
 
 st.caption(
     "Functional form: ``units = β₀ + Σ β_c · S(adstock(spend_c)) + γ·controls``. "
     "Adstock geometric (``y_t = x_t + λ·y_{t-1}``); saturation Hill / Michaelis-Menten "
-    "(``S(x) = x / (k + x)``). Coefficients constrained ≥ 0 via NNLS (mirrors the "
-    "Half-Normal prior used in the PyMC-Marketing version)."
+    "(``S(x) = x / (k + x)``). Bayesian fit uses Half-Normal priors on β, Beta on λ, "
+    "LogNormal on k via PyMC-Marketing. Ridge fallback uses NNLS for β ≥ 0 with a "
+    "univariate grid search over (λ, k) — same constraints, no uncertainty."
 )
