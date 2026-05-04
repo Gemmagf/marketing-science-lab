@@ -174,12 +174,20 @@ def _inject_tv_burst(
     burst_start: str = "2025-05-05",
     burst_weeks: int = 4,
     burst_daily: float = 22_000.0,
+    rng: np.random.Generator | None = None,
 ) -> np.ndarray:
+    """Replace a window with a heavy TV burst — with realistic intra-week variability."""
+    if rng is None:
+        rng = np.random.default_rng(0)
     start = pd.Timestamp(burst_start)
     end = start + pd.Timedelta(weeks=burst_weeks)
     mask = (dates >= start) & (dates < end)
     out = spend.copy()
-    out[mask] = burst_daily
+    burst_dates = dates[mask]
+    # Variability: weekend + jitter (real campaigns aren't perfect rectangles)
+    weekend_lift = np.where(burst_dates.dayofweek >= 5, 1.15, 0.95)
+    jitter = rng.normal(1.0, 0.08, size=len(burst_dates)).clip(0.7, 1.3)
+    out[mask] = burst_daily * weekend_lift * jitter
     return out
 
 
@@ -193,6 +201,29 @@ def _temperature(dates: pd.DatetimeIndex, rng: np.random.Generator) -> np.ndarra
 def _is_holiday(dates: pd.DatetimeIndex) -> np.ndarray:
     holidays = pd.to_datetime(list(SWISS_HOLIDAYS)).normalize()
     return np.asarray(dates.normalize().isin(holidays), dtype=int)
+
+
+# Named campaigns that show up in the dashboards as labels — gives the
+# synthetic data a "real brand calendar" feel.
+_CAMPAIGNS: tuple[tuple[str, str, str], ...] = (
+    ("2024-03-01", "2024-03-21", "Spring Launch"),
+    ("2024-06-15", "2024-07-15", "Summer Peak"),
+    ("2024-11-20", "2024-12-02", "Black Friday Wave"),
+    ("2024-12-12", "2024-12-25", "Holiday Push"),
+    ("2025-01-15", "2025-02-05", "Winter Clearance"),
+    ("2025-05-05", "2025-06-02", "TV Burst (DACH)"),
+    ("2025-09-15", "2025-10-15", "Autumn Activation"),
+    ("2025-11-19", "2025-12-01", "Black Friday Wave"),
+    ("2025-12-10", "2025-12-25", "Holiday Push"),
+)
+
+
+def _label_campaigns(dates: pd.DatetimeIndex) -> np.ndarray:
+    out = np.array([""] * len(dates), dtype=object)
+    for start, end, name in _CAMPAIGNS:
+        s, e = pd.Timestamp(start), pd.Timestamp(end)
+        out[(dates >= s) & (dates < e)] = name
+    return out
 
 
 def _promo_pct(
@@ -247,13 +278,14 @@ def generate_dataset(
     df["is_holiday"] = _is_holiday(dates)
     df["temperature_c"] = _temperature(dates, rng)
     df["promo_pct"] = _promo_pct(dates, df["is_holiday"].to_numpy(), rng)
+    df["campaign"] = _label_campaigns(dates)
 
     # Channel spend & per-channel contribution to units
     contribs_total = np.zeros(n)
     for ch in CHANNELS:
         spend = _generate_spend(rng, n, ch)
         if inject_tv_burst and ch.name == "tv_spend":
-            spend = _inject_tv_burst(spend, dates)
+            spend = _inject_tv_burst(spend, dates, rng=rng)
         df[ch.name] = spend
         stocked = adstock_geometric(spend, ch.decay)
         contribution = ch.beta * saturation_hill(stocked, ch.half_sat)

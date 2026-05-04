@@ -164,7 +164,10 @@ def test_tv_burst_window_present():
     df, _ = generate_dataset(inject_tv_burst=True)
     burst = df[(df["date"] >= "2025-05-05") & (df["date"] < "2025-06-02")]
     assert len(burst) == 28
-    assert (burst["tv_spend"] > 20_000).all()
+    # Burst centred around 22k CHF with weekend lift + ±20% jitter — every
+    # day should be at least 12k (well above non-burst days).
+    assert (burst["tv_spend"] > 12_000).all()
+    assert burst["tv_spend"].mean() > 20_000
 
 
 def test_tv_burst_can_be_disabled():

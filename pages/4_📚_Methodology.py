@@ -3,16 +3,32 @@ from __future__ import annotations
 
 import streamlit as st
 
+from src import brand
 
-st.set_page_config(page_title="Methodology · Marketing Science Lab", page_icon="📚", layout="wide")
 
-st.title("📚 Methodology & design choices")
+st.set_page_config(
+    page_title=f"{brand.BRAND_NAME} · Methodology",
+    page_icon="📚",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+st.markdown(
+    f"""<div style="font-size: 0.95rem; font-weight: 700; letter-spacing: 0.05em;
+        color: {brand.COLOURS["primary"]};">alp<span style="color: {brand.COLOURS["accent"]};">Sel</span> · Methodology</div>""",
+    unsafe_allow_html=True,
+)
+st.markdown(
+    """<h1 style="font-size: 3rem; line-height: 1.1; letter-spacing: -0.02em;
+        margin-top: 0.2rem; margin-bottom: 1.5rem;">Formulas, choices, references.</h1>""",
+    unsafe_allow_html=True,
+)
 
 st.markdown(
     r"""
 ## Synthetic data
 
-A 731-day daily panel for a fictional D2C running brand with six channels
+A 731-day daily panel for the (fictional) AlpSel brand — six channels
 (`tv_spend`, `search_spend`, `social_spend`, `display_spend`, `email_sends`,
 `ooh_spend`). Generated from a known DGP so models can be validated against
 ground truth — see `src/data_generation.py`.
