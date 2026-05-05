@@ -22,16 +22,7 @@ st.set_page_config(
 )
 
 
-st.markdown(
-    f"""<div style="font-size: 0.95rem; font-weight: 700; letter-spacing: 0.05em;
-        color: {brand.COLOURS["primary"]};">alp<span style="color: {brand.COLOURS["accent"]};">Sel</span> · Case 02 / 03</div>""",
-    unsafe_allow_html=True,
-)
-st.markdown(
-    f"""<h1 style="font-size: 3rem; line-height: 1.1; letter-spacing: -0.02em;
-        margin-top: 0.2rem; margin-bottom: 1.5rem;">Did the May TV burst pay back — or did summer?</h1>""",
-    unsafe_allow_html=True,
-)
+brand.render_page_chrome("02", "03", "Did the May TV burst pay back — or did summer?")
 
 brand.render_question(
     "AlpSel ran a 4-week TV burst in DACH from 5 May to 1 June 2025. "

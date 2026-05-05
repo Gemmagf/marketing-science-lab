@@ -20,18 +20,7 @@ st.set_page_config(
 )
 
 
-# --- Page chrome ---------------------------------------------------------
-
-st.markdown(
-    f"""<div style="font-size: 0.95rem; font-weight: 700; letter-spacing: 0.05em;
-        color: {brand.COLOURS["primary"]};">alp<span style="color: {brand.COLOURS["accent"]};">Sel</span> · Case 01 / 03</div>""",
-    unsafe_allow_html=True,
-)
-st.markdown(
-    f"""<h1 style="font-size: 3rem; line-height: 1.1; letter-spacing: -0.02em;
-        margin-top: 0.2rem; margin-bottom: 1.5rem;">Where to invest CHF 5M next quarter?</h1>""",
-    unsafe_allow_html=True,
-)
+brand.render_page_chrome("01", "03", "Where to invest CHF 5M next quarter?")
 
 
 brand.render_question(
