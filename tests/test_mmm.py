@@ -4,16 +4,33 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from src.data_generation import CHANNELS, generate_dataset
-from src.mmm import MMM, channel_mroi, optimise_budget
+from src.data_generation import CHANNELS, SALES_CHANNELS, generate_dataset
+from src.mmm import MMM, channel_mroi, fit_per_sales_channel, optimise_budget
 
 
 @pytest.fixture(scope="module")
 def fitted():
     df, truth = generate_dataset(seed=42)
     mmm = MMM()
-    fit = mmm.fit(df)
+    fit = mmm.fit(df)   # defaults to units_total
     return df, truth, mmm, fit
+
+
+def test_fit_per_sales_channel_returns_three_fits():
+    df, _ = generate_dataset(seed=42)
+    fits = fit_per_sales_channel(df)
+    assert set(fits.keys()) == set(SALES_CHANNELS)
+    for sc, (mmm, fit) in fits.items():
+        assert fit.r_squared > 0.7, f"{sc} R² too low: {fit.r_squared}"
+        for beta in fit.betas.values():
+            assert beta >= 0
+
+
+def test_fit_per_sales_channel_missing_column_raises():
+    df, _ = generate_dataset(seed=42)
+    df_bad = df.drop(columns=["units_supermarket"])
+    with pytest.raises(KeyError):
+        fit_per_sales_channel(df_bad)
 
 
 def test_fit_quality(fitted):

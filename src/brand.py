@@ -42,6 +42,7 @@ CHANNEL_LABELS: dict[str, str] = {
     "display_spend": "Display & retargeting",
     "email_sends":   "Email & CRM",
     "ooh_spend":     "OOH (DOOH + transit)",
+    "leaflet_spend": "Leaflets & in-store promo",
 }
 
 UNIT_PRICE_CHF = 165.0

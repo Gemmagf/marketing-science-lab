@@ -37,6 +37,7 @@ __all__ = [
     "FitResult",
     "MMM",
     "channel_mroi",
+    "fit_per_sales_channel",
     "optimise_budget",
 ]
 
@@ -167,7 +168,7 @@ class MMM:
 
     # --- main fit --------------------------------------------------------
 
-    def fit(self, df: pd.DataFrame, target_col: str = "units_sold") -> FitResult:
+    def fit(self, df: pd.DataFrame, target_col: str = "units_total") -> FitResult:
         target = df[target_col].to_numpy(dtype=np.float64)
 
         decays, half_sats = self._pick_hparams(df, target)
@@ -319,3 +320,24 @@ def optimise_budget(
     else:
         res_x = res.x
     return {ch.name: float(res_x[i]) for i, ch in enumerate(chans)}
+
+
+def fit_per_sales_channel(
+    df: pd.DataFrame,
+    sales_channels: Sequence[str] = ("supermarket", "online", "stores"),
+) -> dict[str, tuple["MMM", FitResult]]:
+    """Fit one MMM per sales channel — that's the cross-effect view.
+
+    Returns a mapping ``sales_channel -> (mmm, fit_result)`` so callers
+    can render per-channel diagnostics, marginal ROIs and saturation
+    curves without re-running the (expensive) hyperparameter search.
+    """
+    out: dict[str, tuple["MMM", FitResult]] = {}
+    for sc in sales_channels:
+        col = f"units_{sc}"
+        if col not in df.columns:
+            raise KeyError(f"missing column {col!r} for sales channel {sc!r}")
+        mmm = MMM()
+        fit = mmm.fit(df, target_col=col)
+        out[sc] = (mmm, fit)
+    return out

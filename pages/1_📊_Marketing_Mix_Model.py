@@ -1,4 +1,9 @@
-"""AlpSel · Case 01 — Where to invest CHF 5M next quarter?"""
+"""AlpSel · Marketing Mix per channel.
+
+Pick a sales channel (supermarket / online / stores) and see the MMM
+fit for it: KPIs, decomposition, saturation curves, and the budget
+reallocation that maximises units in *that* channel.
+"""
 from __future__ import annotations
 
 import numpy as np
@@ -8,105 +13,107 @@ import streamlit as st
 
 from src import brand, viz
 from src.bayesian import load_posterior
-from src.data_generation import CHANNELS, generate_dataset, saturation_hill
-from src.mmm import MMM, channel_mroi, optimise_budget
+from src.data_generation import (
+    BASELINE, CHANNELS, SALES_CHANNELS, UNIT_PRICE_CHF, generate_dataset,
+    saturation_hill,
+)
+from src.mmm import MMM, channel_mroi, fit_per_sales_channel, optimise_budget
 
 
 st.set_page_config(
-    page_title=f"{brand.BRAND_NAME} · MMM case",
+    page_title=f"{brand.BRAND_NAME} · MMM per channel",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
 
-brand.render_page_chrome("01", "03", "Where to invest CHF 5M next quarter?")
-
-
-brand.render_question(
-    "AlpSel's Q1 2026 marketing budget is CHF 5M. Senior leadership wants the "
-    "allocation that maximises revenue, not vanity reach metrics.",
-    sub="A Bayesian MMM (PyMC-Marketing, NUTS) decomposes 2024–2025 daily sales "
-    "into baseline, controls and per-channel contributions — then a constrained "
-    "optimiser searches the spend mix that beats the current allocation.",
+brand.render_page_chrome("MMM", "—",
+                         "Marketing Mix Model — one fit per sales channel")
+st.subheader(
+    "Pick the sales channel you want to optimise for. Each fit isolates how "
+    "marketing spend converts into units sold *for that channel*."
 )
 
 
-# --- Load fit ------------------------------------------------------------
-
-@st.cache_data(show_spinner="Loading AlpSel panel…")
+@st.cache_data(show_spinner="Loading panel…")
 def _load(seed: int = 42):
     return generate_dataset(seed=seed)
 
 
-@st.cache_resource(show_spinner="Fitting Ridge fallback (~3s)…")
-def _ridge_fit(seed: int = 42):
+@st.cache_resource(show_spinner="Fitting one MMM per sales channel…")
+def _fit_all(seed: int = 42):
     df, truth = _load(seed)
-    mmm = MMM()
-    fit = mmm.fit(df)
-    return df, truth, mmm, fit
+    fits = fit_per_sales_channel(df)
+    return df, truth, fits
 
 
-df, truth, mmm, fit = _ridge_fit()
+df, truth, fits = _fit_all()
 posterior = load_posterior()
 
-# Use Bayesian betas if available, fall back to Ridge for the optimiser
-if posterior is not None:
-    betas_for_decisions = posterior.betas_mean
-    decay_for_decisions = posterior.decay_mean
-else:
-    betas_for_decisions = fit.betas
-    decay_for_decisions = fit.decay
+# Sidebar / top selector for the sales channel
+sc = st.radio(
+    "Sales channel",
+    SALES_CHANNELS,
+    format_func=lambda s: {"supermarket": "🛒 Supermarket",
+                           "online": "🛍 Online store",
+                           "stores": "🏬 Specialty stores"}[s],
+    horizontal=True,
+)
+
+mmm, fit = fits[sc]
+unit_price = UNIT_PRICE_CHF[sc]
 
 
 # --- Headline KPIs -------------------------------------------------------
 
-st.markdown("### Last 12 months — what we already know")
-total_revenue = float(df["revenue_chf"].sum())
-total_spend = float(df[["tv_spend", "search_spend", "social_spend", "display_spend", "ooh_spend"]].sum().sum())
-total_emails = float(df["email_sends"].sum())
-units = float(df["units_sold"].sum())
-roas = total_revenue / total_spend if total_spend > 0 else 0.0
+st.divider()
+st.markdown(f"### Last 24 months — {sc.title()}")
+
+total_revenue = float(df[f"revenue_{sc}"].sum())
+total_units = float(df[f"units_{sc}"].sum())
+total_spend = float(df[["tv_spend", "search_spend", "social_spend",
+                        "display_spend", "ooh_spend", "leaflet_spend"]].sum().sum())
+roas = total_revenue / total_spend if total_spend else 0.0
 
 k1, k2, k3, k4 = st.columns(4)
-k1.metric("Revenue", f"CHF {total_revenue/1e6:,.1f}M")
-k2.metric("Marketing spend", f"CHF {total_spend/1e6:,.1f}M")
-k3.metric("Blended ROAS", f"{roas:,.1f}×")
-k4.metric("Units sold", f"{units:,.0f}")
+k1.metric(f"Revenue ({sc})", f"CHF {total_revenue/1e6:,.1f}M")
+k2.metric(f"Units sold ({sc})", f"{total_units:,.0f}")
+k3.metric("Marketing spend", f"CHF {total_spend/1e6:,.1f}M")
+k4.metric("ROAS attributable", f"{roas:,.1f}×",
+          help=f"Total marketing CHF / {sc} revenue. "
+               "Note: marketing also lifts other sales channels.")
 
 
 # --- Channel decomposition -----------------------------------------------
 
-st.markdown("### Decomposition — every CHF earned, attributed")
-view = df.copy()
+st.markdown(f"### Decomposition — drivers of {sc.title()} units")
 fit_view = fit.contribution.copy()
-
-decomp_df = view[["date"]].copy()
+decomp_df = df[["date"]].copy()
 decomp_df["baseline"] = fit_view["baseline"].values
 for ch in CHANNELS:
     decomp_df[brand.CHANNEL_LABELS[ch.name]] = fit_view[f"contrib_{ch.name}"].values
 
+palette = [
+    brand.COLOURS["primary"], brand.COLOURS["accent"], brand.COLOURS["good"],
+    brand.COLOURS["warn"], "#7A4DC8", brand.COLOURS["muted"], "#E91E63",
+]
 fig = go.Figure()
 fig.add_trace(go.Scatter(
     x=decomp_df["date"], y=decomp_df["baseline"], mode="lines",
-    name="Baseline (organic)",
-    line=dict(color=brand.COLOURS["muted"], width=1),
+    name="Baseline (organic)", line=dict(color=brand.COLOURS["muted"], width=1),
     stackgroup="one",
 ))
-channel_palette = [
-    brand.COLOURS["primary"], brand.COLOURS["accent"], brand.COLOURS["good"],
-    brand.COLOURS["warn"], "#7A4DC8", brand.COLOURS["muted"],
-]
-for ch, col in zip(CHANNELS, channel_palette):
+for ch, col in zip(CHANNELS, palette):
     fig.add_trace(go.Scatter(
         x=decomp_df["date"], y=decomp_df[brand.CHANNEL_LABELS[ch.name]],
         mode="lines", name=brand.CHANNEL_LABELS[ch.name],
         line=dict(width=0), stackgroup="one", fillcolor=col,
     ))
 fig.update_layout(
-    title="Daily units — baseline + channel contributions",
+    title=f"Daily {sc} units — baseline + channel contributions",
     plot_bgcolor=brand.COLOURS["bg"], paper_bgcolor=brand.COLOURS["bg"],
-    height=420, margin=dict(l=20, r=20, t=50, b=30),
+    height=400, margin=dict(l=20, r=20, t=50, b=30),
     legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
 )
 fig.update_xaxes(showgrid=False)
@@ -114,190 +121,126 @@ fig.update_yaxes(gridcolor=brand.COLOURS["panel"], title="Units")
 st.plotly_chart(fig, use_container_width=True)
 
 
-# --- Saturation per channel ---------------------------------------------
+# --- Saturation curves --------------------------------------------------
 
-st.markdown("### Diminishing returns — where is each channel?")
+st.markdown(f"### Diminishing returns — where each channel sits for {sc.title()}")
 st.caption(
-    "Vertical bar = current avg daily spend. Channels sitting on the flat part "
-    "of the curve are wasting marginal CHF; channels still climbing are starved."
+    "Vertical bar = current avg daily spend. Channels on the flat part are "
+    "wasting marginal CHF (candidates for PAUSE); channels still climbing are "
+    "starved (candidates for ACTIVATE)."
 )
 
 cols = st.columns(3, gap="medium")
 for i, ch in enumerate(CHANNELS):
     grid = np.linspace(1, ch.max_spend * 2, 80)
-    lam = decay_for_decisions.get(ch.name, fit.decay[ch.name])
-    stock = grid / (1 - lam) if lam < 1 else grid
-    response = betas_for_decisions.get(ch.name, fit.betas[ch.name]) * saturation_hill(stock, fit.half_sat[ch.name])
-    current = float(df[ch.name].mean())
+    lam = fit.decay[ch.name]
+    stock = grid / max(1 - lam, 1e-3)
+    response = fit.betas[ch.name] * saturation_hill(stock, fit.half_sat[ch.name])
     fig_s = viz.saturation_curve(
         spend_grid=grid, response=response,
-        current_spend=current,
+        current_spend=float(df[ch.name].mean()),
         title=brand.CHANNEL_LABELS[ch.name],
-        colour=channel_palette[i],
+        colour=palette[i],
     )
-    fig_s.update_layout(height=260, margin=dict(l=20, r=20, t=40, b=30))
+    fig_s.update_layout(height=240, margin=dict(l=20, r=20, t=40, b=30))
     cols[i % 3].plotly_chart(fig_s, use_container_width=True)
 
 
-# --- The optimiser - this is where the decision comes from --------------
+# --- Optimiser ---------------------------------------------------------
 
-st.markdown("### What if we reallocate the same CHF differently?")
+st.divider()
+st.markdown(f"### Optimal allocation for {sc.title()}")
+
 current_alloc = {ch.name: float(df[ch.name].mean()) for ch in CHANNELS}
 default_total = float(sum(current_alloc.values()))
 
-col_l, col_r = st.columns([1, 1.2], gap="large")
-with col_l:
-    target_total = st.slider(
-        "Total daily budget (CHF + email sends, summed)",
-        min_value=int(default_total * 0.7),
-        max_value=int(default_total * 1.3),
-        value=int(default_total),
-        step=1000,
-    )
-    optimal = optimise_budget(mmm, total_budget=float(target_total))
-    units_current = mmm.predict_total(current_alloc, n_days=90)
-    units_optimal = mmm.predict_total(optimal, n_days=90)
-    units_delta = units_optimal - units_current
-    revenue_delta = units_delta * brand.UNIT_PRICE_CHF
+target_total = st.slider(
+    "Total daily marketing budget (CHF + email sends, summed)",
+    min_value=int(default_total * 0.7),
+    max_value=int(default_total * 1.3),
+    value=int(default_total),
+    step=1000,
+)
 
-with col_r:
+optimal = optimise_budget(mmm, total_budget=float(target_total))
+
+units_current = mmm.predict_total(current_alloc, n_days=90)
+units_optimal = mmm.predict_total(optimal, n_days=90)
+revenue_delta_year = (units_optimal - units_current) * unit_price * (365.0 / 90.0)
+
+c_left, c_right = st.columns([1, 1.2], gap="large")
+with c_left:
+    if revenue_delta_year > 1000:
+        st.success(
+            f"#### Reallocate to capture **+CHF {revenue_delta_year:,.0f}** of "
+            f"incremental annual revenue in {sc}."
+        )
+    elif revenue_delta_year > 0:
+        st.info("#### Current allocation is close to optimal for this channel.")
+    else:
+        st.warning("#### Current allocation already at the local optimum.")
+
+    st.markdown("**Top moves:**")
+    moves = []
+    for ch in CHANNELS:
+        delta = optimal[ch.name] - current_alloc[ch.name]
+        moves.append((ch.label, current_alloc[ch.name], optimal[ch.name], delta))
+    for lbl, cur, opt, delta in sorted(moves, key=lambda x: abs(x[3]), reverse=True)[:4]:
+        if abs(delta) < 50:
+            continue
+        arrow = "↑" if delta >= 0 else "↓"
+        pct = (delta / cur) if cur > 0 else 0
+        st.markdown(
+            f"- **{lbl}** — {arrow} CHF {abs(delta):,.0f}/day "
+            f"(`{cur:,.0f}` → `{opt:,.0f}`, **{pct:+.0%}**)"
+        )
+
+with c_right:
     labels = [brand.CHANNEL_LABELS[ch.name] for ch in CHANNELS]
     fig_opt = go.Figure()
     fig_opt.add_trace(go.Bar(
-        x=labels, y=[current_alloc[c.name] for c in CHANNELS],
-        name="Current avg", marker_color=brand.COLOURS["muted"],
+        x=labels, y=[current_alloc[ch.name] for ch in CHANNELS],
+        name="Current", marker_color=brand.COLOURS["muted"],
     ))
     fig_opt.add_trace(go.Bar(
-        x=labels, y=[optimal[c.name] for c in CHANNELS],
+        x=labels, y=[optimal[ch.name] for ch in CHANNELS],
         name="Optimal", marker_color=brand.COLOURS["accent"],
     ))
     fig_opt.update_layout(
-        barmode="group", title="Daily allocation — current vs optimal",
+        barmode="group", title=f"Allocation — current vs optimal for {sc}",
         plot_bgcolor=brand.COLOURS["bg"], paper_bgcolor=brand.COLOURS["bg"],
         height=320, margin=dict(l=20, r=20, t=50, b=30),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
     )
-    fig_opt.update_yaxes(gridcolor=brand.COLOURS["panel"])
+    fig_opt.update_xaxes(tickangle=-25)
+    fig_opt.update_yaxes(gridcolor=brand.COLOURS["panel"], title="CHF / day")
     st.plotly_chart(fig_opt, use_container_width=True)
 
 
-# --- The headline numbers used in the decision --------------------------
+# --- Diagnostics expander ----------------------------------------------
 
-# Annualise the 90-day delta, capped at sensible levels
-annual_revenue_delta = revenue_delta * (365.0 / 90.0)
-# "Missed opportunity" = revenue we'd have made YTD if we had used the optimal mix
-# Approximate it as 365-day delta (this is a simulated brand, so we display it as
-# annual upside).
-
-if annual_revenue_delta > 0:
-    brand.render_missed_opportunity(
-        label="left on the table over the last 12 months by sticking with the current allocation.",
-        chf=annual_revenue_delta,
-        sub=(
-            "Computed as (predicted units under optimal allocation - predicted units under current "
-            "allocation) × CHF 165 average unit price, scaled to a full year. The optimiser respects "
-            "each channel's min/max bounds — no 10× moves."
-        ),
-    )
-else:
-    st.info("At this budget, current allocation is already near-optimal.")
-
-
-# --- The biggest reallocation moves -------------------------------------
-
-st.markdown("### The three biggest moves the optimiser is recommending")
-moves = []
-for ch in CHANNELS:
-    cur = current_alloc[ch.name]
-    opt = optimal[ch.name]
-    delta = opt - cur
-    pct = (delta / cur) if cur > 0 else 0
-    moves.append((brand.CHANNEL_LABELS[ch.name], cur, opt, delta, pct))
-moves_sorted = sorted(moves, key=lambda x: abs(x[3]), reverse=True)[:3]
-
-m1, m2, m3 = st.columns(3, gap="medium")
-for col, (lbl, cur, opt, delta, pct) in zip([m1, m2, m3], moves_sorted):
-    arrow = "↑" if delta >= 0 else "↓"
-    color = brand.COLOURS["good"] if delta >= 0 else brand.COLOURS["danger"]
-    col.markdown(
-        f"""
-        <div style="border: 1px solid {brand.COLOURS["panel"]}; padding: 1.2rem;
-                    border-radius: 10px; background: {brand.COLOURS["bg"]};">
-            <div style="font-size: 0.75rem; font-weight: 700; letter-spacing: 0.1em;
-                        text-transform: uppercase; color: {brand.COLOURS["muted"]};">{lbl}</div>
-            <div style="font-size: 1.8rem; font-weight: 700; color: {color};
-                        line-height: 1; margin-top: 0.3rem;">{arrow} {pct:+.0%}</div>
-            <div style="font-size: 0.92rem; color: {brand.COLOURS["ink"]}; margin-top: 0.6rem;">
-                CHF <strong>{cur:,.0f}</strong> → <strong>{opt:,.0f}</strong> per day
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-# --- The decision -------------------------------------------------------
-
-# Build a sentence enumerating up/downs from the top 2 moves
-ups = [m for m in moves_sorted if m[3] > 0][:2]
-downs = [m for m in moves_sorted if m[3] < 0][:2]
-parts = []
-if ups:
-    parts.append("scale up " + ", ".join(f"{u[0]} ({u[4]:+.0%})" for u in ups))
-if downs:
-    parts.append("pull back " + ", ".join(f"{d[0]} ({d[4]:+.0%})" for d in downs))
-detail = "Reallocate within the same envelope — " + " and ".join(parts) + "."
-
-decision = brand.Decision(
-    headline="Hold total budget. Move CHF "
-    f"{abs(sum(d[3] for d in moves_sorted if d[3] < 0)):,.0f}/day from saturated channels into starved ones.",
-    detail=detail,
-    impact_chf=annual_revenue_delta,
-    confidence="medium" if posterior is not None else "low",
-    risks=(
-        "Coefficients are learned on simulated data — calibrate against AlpSel's real lift tests before execution.",
-        "Saturation curves assume current creative quality; a fresh creative cycle can shift the curve right.",
-        "Moves >25% per quarter risk killing reach contracts and ad-tech relationships.",
-    ),
-)
-brand.render_decision(decision)
-
-
-# --- Diagnostics expander (for analysts) --------------------------------
-
-with st.expander("📐 Diagnostics — for the analyst, not the recruiter"):
+with st.expander("📐 Diagnostics — for the analyst"):
     d1, d2 = st.columns(2)
+    d1.metric("Ridge R²", f"{fit.r_squared:.3f}")
+    d2.metric("Ridge MAPE", f"{fit.mape:.2%}")
     if posterior is not None:
-        d1.metric("Bayesian R²", f"{posterior.r_squared:.3f}")
-        d2.metric("Bayesian MAPE", f"{posterior.mape:.2%}")
         st.caption(
-            f"Posterior fit · {posterior.chains} chains × {posterior.draws} draws · "
-            f"PyMC-Marketing 0.19 · LogisticSaturation + GeometricAdstock"
+            f"A Bayesian posterior is also available (R² {posterior.r_squared:.0%}, "
+            f"6/6 channels recovered within 90% CI on the previous single-output "
+            f"model — multi-output Bayesian fit is on the roadmap)."
         )
-        channels = list(truth.betas.keys())
-        fig_b = go.Figure()
-        fig_b.add_trace(go.Bar(
-            x=[brand.CHANNEL_LABELS[c] for c in channels], y=[truth.betas[c] for c in channels],
-            name="Ground truth", marker_color=brand.COLOURS["primary"],
-        ))
-        fig_b.add_trace(go.Bar(
-            x=[brand.CHANNEL_LABELS[c] for c in channels], y=[posterior.betas_mean.get(c, 0.0) for c in channels],
-            name="Posterior mean", marker_color=brand.COLOURS["accent"],
-            error_y=dict(
-                type="data", symmetric=False,
-                array=[posterior.betas_q95.get(c, 0.0) - posterior.betas_mean.get(c, 0.0) for c in channels],
-                arrayminus=[posterior.betas_mean.get(c, 0.0) - posterior.betas_q05.get(c, 0.0) for c in channels],
-            ),
-        ))
-        fig_b.update_layout(
-            barmode="group", title="β recovery vs ground truth (with 90% CI)",
-            plot_bgcolor=brand.COLOURS["bg"], paper_bgcolor=brand.COLOURS["bg"],
-        )
-        st.plotly_chart(fig_b, use_container_width=True)
-    else:
-        d1.metric("Ridge R²", f"{fit.r_squared:.3f}")
-        d2.metric("Ridge MAPE", f"{fit.mape:.2%}")
-        st.caption("No Bayesian posterior on disk; showing Ridge / NNLS fallback.")
+
+    # Recovery vs ground truth (per-sales-channel βs from the new DGP)
+    truth_betas_for_sc = {ch.name: truth.betas[ch.name][sc] for ch in CHANNELS}
+    rec = pd.DataFrame({
+        "channel":     [brand.CHANNEL_LABELS[ch.name] for ch in CHANNELS],
+        "true β":      [truth_betas_for_sc[ch.name] for ch in CHANNELS],
+        "Ridge β":     [fit.betas[ch.name] for ch in CHANNELS],
+        "true λ":      [truth.decay[ch.name] for ch in CHANNELS],
+        "Ridge λ":     [fit.decay[ch.name] for ch in CHANNELS],
+    })
+    st.dataframe(rec.style.format("{:,.2f}", subset=["true β", "Ridge β", "true λ", "Ridge λ"]),
+                 use_container_width=True, hide_index=True)
 
 
 brand.render_synthetic_disclaimer()
